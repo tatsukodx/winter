@@ -285,35 +285,30 @@ class GasterBlasterManager:
         self.scheduled.append(ScheduledBlaster(pos, angle, delay_ms))
 
     def check_collision_beam_soul(self, beam, soul, root_pos):
-        # ソウルの半径
+        # ビームがまだ伸びていない
+        if beam.length <= 0:
+            return False
+
         soul_radius = 10
-
-        # ビームの半径
         beam_radius = beam.width / 2
-
-        # 合計半径
         radius = soul_radius + beam_radius
 
-        # 方向ベクトル
         rad = math.radians(beam.angle)
         dir_vec = pygame.Vector2(math.cos(rad), -math.sin(rad))
-
-        # 法線
         normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
 
-        # 4頂点
         p1 = root_pos + normal * beam_radius
         p2 = root_pos - normal * beam_radius
         p3 = p2 + dir_vec * beam.length
         p4 = p1 + dir_vec * beam.length
 
-        # ソウルの位置
         sp = soul.pos
 
-        # 線分 p1→p4 に対する距離
         line_vec = p4 - p1
-        point_vec = sp - p1
+        if line_vec.length_squared() == 0:
+            return False
 
+        point_vec = sp - p1
         t = max(0, min(1, point_vec.dot(line_vec) / line_vec.length_squared()))
         closest = p1 + line_vec * t
 
