@@ -21,7 +21,6 @@ class Animation:
         self.frames = frames
         self.frame_duration = frame_duration
         self.loop = loop
-
         self.current_time = 0
         self.current_frame = 0
         self.finished = False
@@ -45,56 +44,9 @@ class Animation:
     def get_frame(self):
         return self.frames[self.current_frame]
 
-# ============================
-#  バトルボックス
-# ============================
-class BattleBox:
-    def __init__(self, x, y, w, h):
-        self.rect = pygame.Rect(x, y, w, h)
-
-    def draw(self, screen):
-        pygame.draw.rect(screen, (255, 255, 255), self.rect, 4)  # 枠線のみ
-        
-        
-# ============================
-#  ソウル（プレイヤー）
-# ============================
-class Soul:
-    def __init__(self, box: BattleBox):
-        self.image = pygame.image.load("sprite/soul/soul.png").convert_alpha()
-        self.pos = pygame.Vector2(
-            box.rect.centerx,
-            box.rect.centery
-        )
-        self.speed = 4
-        self.box = box
-
-    def update(self, keys):
-        if keys[pygame.K_UP]:
-            self.pos.y -= self.speed
-        if keys[pygame.K_DOWN]:
-            self.pos.y += self.speed
-        if keys[pygame.K_LEFT]:
-            self.pos.x -= self.speed
-        if keys[pygame.K_RIGHT]:
-            self.pos.x += self.speed
-
-        # ⭐ バトルボックス内に制限
-        if self.pos.x < self.box.rect.left + 10:
-            self.pos.x = self.box.rect.left + 10
-        if self.pos.x > self.box.rect.right - 10:
-            self.pos.x = self.box.rect.right - 10
-        if self.pos.y < self.box.rect.top + 10:
-            self.pos.y = self.box.rect.top + 10
-        if self.pos.y > self.box.rect.bottom - 10:
-            self.pos.y = self.box.rect.bottom - 10
-
-    def draw(self, screen):
-        rect = self.image.get_rect(center=self.pos)
-        screen.blit(self.image, rect)
 
 # ============================
-#  ビーム（根本は毎フレーム更新）
+#  ビーム（ポリゴン方式）
 # ============================
 class Beam:
     def __init__(self, angle):
@@ -112,16 +64,21 @@ class Beam:
     def draw(self, screen, root_pos):
         rad = math.radians(self.angle)
 
-        end_x = root_pos.x + math.cos(rad) * self.length
-        end_y = root_pos.y - math.sin(rad) * self.length
+        # 方向ベクトル
+        dir_vec = pygame.Vector2(math.cos(rad), -math.sin(rad))
 
-        pygame.draw.line(
-            screen,
-            (255, 255, 255),
-            root_pos,
-            (end_x, end_y),
-            self.width
-        )
+        # 法線ベクトル（横方向）
+        normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
+
+        half_w = self.width / 2
+
+        # 4頂点
+        p1 = root_pos + normal * half_w
+        p2 = root_pos - normal * half_w
+        p3 = p2 + dir_vec * self.length
+        p4 = p1 + dir_vec * self.length
+
+        pygame.draw.polygon(screen, (255, 255, 255), [p1, p2, p3, p4])
 
 
 # ============================
@@ -129,31 +86,24 @@ class Beam:
 # ============================
 class GasterBlaster:
     def __init__(self, pos=(300, 300)):
-        # 出現：1
-        appear_frames = [
+        self.anim_appear = Animation([
             pygame.image.load("sprite/gasterblaster/1.png").convert_alpha()
-        ]
-        self.anim_appear = Animation(appear_frames, 200, False)
+        ], 200, False)
 
-        # 開口：2 → 3 → 4
-        open_frames = [
+        self.anim_open = Animation([
             pygame.image.load("sprite/gasterblaster/2.png").convert_alpha(),
             pygame.image.load("sprite/gasterblaster/3.png").convert_alpha(),
             pygame.image.load("sprite/gasterblaster/4.png").convert_alpha(),
-        ]
-        self.anim_open = Animation(open_frames, 120, False)
+        ], 120, False)
 
-        # 発射：5 ↔ 6
-        disappear_frames = [
+        self.anim_disappear = Animation([
             pygame.image.load("sprite/gasterblaster/5.png").convert_alpha(),
             pygame.image.load("sprite/gasterblaster/6.png").convert_alpha(),
-        ]
-        self.anim_disappear = Animation(disappear_frames, 150, True)
+        ], 150, True)
 
         self.state = GBState.APPEAR
         self.current_anim = self.anim_appear
 
-        # 出現演出
         self.final_pos = pygame.Vector2(pos)
         self.start_pos = pygame.Vector2(
             random.randint(0, 600),
@@ -165,23 +115,18 @@ class GasterBlaster:
         self.appear_time = 0
         self.appear_duration = 800
 
-        # 回転
         self.target_angle = 0
-        self.angle = self.target_angle + 360  # 1回転分
+        self.angle = self.target_angle + 360
 
-        # 発射後の後退
         self.back_speed = 0
-
-        # ビーム
         self.beam = None
 
     def update(self, dt):
-        # 出現
         if self.state == GBState.APPEAR:
             self.appear_time += dt
             t = min(self.appear_time / self.appear_duration, 1)
-
             ease_t = 1 - (1 - t) ** 2
+
             self.current_pos = self.start_pos.lerp(self.final_pos, ease_t)
             self.alpha = int(255 * ease_t)
 
@@ -192,25 +137,18 @@ class GasterBlaster:
                 self.state = GBState.OPEN
                 self.current_anim = self.anim_open
 
-        # 開口
         elif self.state == GBState.OPEN:
             self.current_anim.update(dt)
-
             if self.current_anim.finished:
                 self.state = GBState.DISAPPEAR
                 self.current_anim = self.anim_disappear
-
-                # ビーム生成（root_pos は毎フレーム更新）
                 self.beam = Beam(self.target_angle)
 
-        # 発射
         elif self.state == GBState.DISAPPEAR:
             self.current_anim.update(dt)
-
             if self.beam:
                 self.beam.update(dt)
 
-            # 後退
             back_vec = pygame.Vector2(
                 math.cos(math.radians(self.target_angle + 180)),
                 -math.sin(math.radians(self.target_angle + 180))
@@ -218,14 +156,12 @@ class GasterBlaster:
             self.back_speed += 0.02 * dt
             self.current_pos += back_vec * self.back_speed
 
-    # ビームだけ描画（背景）
     def draw_beam_only(self, screen):
         if self.beam:
             mouth_offset = pygame.Vector2(0, 40).rotate(-(self.target_angle + 90))
             mouth_pos = self.current_pos + mouth_offset
             self.beam.draw(screen, mouth_pos)
 
-    # 本体だけ描画（前面）
     def draw_body_only(self, screen):
         frame = self.current_anim.get_frame().copy()
 
@@ -240,7 +176,97 @@ class GasterBlaster:
 
 
 # ============================
-#  ガスターブラスター管理クラス
+#  バトルボックス
+# ============================
+class BattleBox:
+    def __init__(self, x, y, w, h):
+        self.rect = pygame.Rect(x, y, w, h)
+
+    def draw(self, screen):
+        pygame.draw.rect(screen, (255, 255, 255), self.rect, 4)
+
+
+# ============================
+#  ソウル（HP・無敵時間・点滅）
+# ============================
+class Soul:
+    def __init__(self, box: BattleBox):
+        self.normal_img = pygame.image.load("sprite/soul/soul.png").convert_alpha()
+        self.damaged_img = pygame.image.load("sprite/soul/damaged.png").convert_alpha()
+
+        self.image = self.normal_img
+        self.pos = pygame.Vector2(box.rect.centerx, box.rect.centery)
+        self.speed = 4
+        self.box = box
+
+        # HP
+        self.max_hp = 92
+        self.hp = 92
+
+        # 無敵時間
+        self.invincible = False
+        self.invincible_timer = 0
+        self.invincible_duration = 1000
+
+        # 点滅
+        self.flash_timer = 0
+        self.flash_duration = 200
+
+    def take_damage(self, amount):
+        if not self.invincible:
+            self.hp -= amount
+            if self.hp < 0:
+                self.hp = 0
+
+            self.invincible = True
+            self.invincible_timer = self.invincible_duration
+            self.flash_timer = self.flash_duration
+            self.image = self.damaged_img
+
+    def update(self, keys, dt):
+        if keys[pygame.K_UP]:
+            self.pos.y -= self.speed
+        if keys[pygame.K_DOWN]:
+            self.pos.y += self.speed
+        if keys[pygame.K_LEFT]:
+            self.pos.x -= self.speed
+        if keys[pygame.K_RIGHT]:
+            self.pos.x += self.speed
+
+        # バトルボックス内に制限
+        if self.pos.x < self.box.rect.left + 10:
+            self.pos.x = self.box.rect.left + 10
+        if self.pos.x > self.box.rect.right - 10:
+            self.pos.x = self.box.rect.right - 10
+        if self.pos.y < self.box.rect.top + 10:
+            self.pos.y = self.box.rect.top + 10
+        if self.pos.y > self.box.rect.bottom - 10:
+            self.pos.y = self.box.rect.bottom - 10
+
+        # 無敵時間
+        if self.invincible:
+            self.invincible_timer -= dt
+            if self.invincible_timer <= 0:
+                self.invincible = False
+                self.image = self.normal_img
+
+        # 点滅
+        if self.flash_timer > 0:
+            self.flash_timer -= dt
+            if (self.flash_timer // 50) % 2 == 0:
+                self.image.set_alpha(255)
+            else:
+                self.image.set_alpha(100)
+        else:
+            self.image.set_alpha(255)
+
+    def draw(self, screen):
+        rect = self.image.get_rect(center=self.pos)
+        screen.blit(self.image, rect)
+
+
+# ============================
+#  ガスターブラスター管理
 # ============================
 class ScheduledBlaster:
     def __init__(self, pos, angle, delay):
@@ -258,8 +284,44 @@ class GasterBlasterManager:
     def spawn_blaster(self, pos, angle, delay_ms):
         self.scheduled.append(ScheduledBlaster(pos, angle, delay_ms))
 
-    def update(self, dt):
-        # 予約処理
+    def check_collision_beam_soul(self, beam, soul, root_pos):
+        # ソウルの半径
+        soul_radius = 10
+
+        # ビームの半径
+        beam_radius = beam.width / 2
+
+        # 合計半径
+        radius = soul_radius + beam_radius
+
+        # 方向ベクトル
+        rad = math.radians(beam.angle)
+        dir_vec = pygame.Vector2(math.cos(rad), -math.sin(rad))
+
+        # 法線
+        normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
+
+        # 4頂点
+        p1 = root_pos + normal * beam_radius
+        p2 = root_pos - normal * beam_radius
+        p3 = p2 + dir_vec * beam.length
+        p4 = p1 + dir_vec * beam.length
+
+        # ソウルの位置
+        sp = soul.pos
+
+        # 線分 p1→p4 に対する距離
+        line_vec = p4 - p1
+        point_vec = sp - p1
+
+        t = max(0, min(1, point_vec.dot(line_vec) / line_vec.length_squared()))
+        closest = p1 + line_vec * t
+
+        distance = (sp - closest).length()
+
+        return distance <= radius
+
+    def update(self, dt, soul):
         for s in self.scheduled[:]:
             s.elapsed += dt
             if s.elapsed >= s.delay:
@@ -268,23 +330,37 @@ class GasterBlasterManager:
                 self.active.append(gb)
                 self.scheduled.remove(s)
 
-        # 本体更新
         for gb in self.active[:]:
             gb.update(dt)
 
-            # 画面外に消えたら削除
+            if gb.beam:
+                mouth_offset = pygame.Vector2(0, 40).rotate(-(gb.target_angle + 90))
+                root_pos = gb.current_pos + mouth_offset
+
+                if self.check_collision_beam_soul(gb.beam, soul, root_pos):
+                    soul.take_damage(5)
+
             if gb.current_pos.x < -300 or gb.current_pos.x > 900 or \
                gb.current_pos.y < -300 or gb.current_pos.y > 900:
                 self.active.remove(gb)
 
     def draw(self, screen):
-        # ビーム（背景）
         for gb in self.active:
             gb.draw_beam_only(screen)
-
-        # 本体（前面）
         for gb in self.active:
             gb.draw_body_only(screen)
+
+
+# ============================
+#  HPバー
+# ============================
+def draw_hp(screen, soul):
+    pygame.draw.rect(screen, (255, 255, 255), (50, 50, 200, 20), 3)
+
+    ratio = soul.hp / soul.max_hp
+    width = int(194 * ratio)
+
+    pygame.draw.rect(screen, (255, 255, 0), (53, 53, width, 14))
 
 
 # ============================
@@ -295,17 +371,13 @@ def main():
     screen = pygame.display.set_mode((600, 600))
     clock = pygame.time.Clock()
 
-    # ⭐ バトルボックス
     box = BattleBox(150, 350, 300, 200)
-
-    # ⭐ ソウル
     soul = Soul(box)
-
-    # ⭐ ガスターブラスター管理
     manager = GasterBlasterManager()
 
-    # 例：召喚
     manager.spawn_blaster((300, 300), 0, 1000)
+    manager.spawn_blaster((100, 500), 90, 2000)
+    manager.spawn_blaster((500, 100), 225, 3000)
 
     running = True
     while running:
@@ -316,15 +388,14 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
 
-        # 更新
-        soul.update(keys)
-        manager.update(dt)
+        soul.update(keys, dt)
+        manager.update(dt, soul)
 
-        # 描画
         screen.fill((0, 0, 0))
         box.draw(screen)
         soul.draw(screen)
         manager.draw(screen)
+        draw_hp(screen, soul)
 
         pygame.display.flip()
 
