@@ -79,9 +79,9 @@ class GasterBlaster:
         self.appear_time = 0
         self.appear_duration = 800  # ミリ秒
 
-        # 回転
-        self.angle = 0
-        self.target_angle = 0  # 発射時に向く角度
+        # 回転（出現中のみ）
+        self.target_angle = 0
+        self.angle = self.target_angle + 360  # ← 1回転分の角度を持たせる
 
     def update(self, dt):
         # 出現ステート
@@ -89,7 +89,7 @@ class GasterBlaster:
             self.appear_time += dt
             t = min(self.appear_time / self.appear_duration, 1)
 
-            # 減速イージング
+            # 減速イージング（移動）
             ease_t = 1 - (1 - t) ** 2
 
             # 位置補間
@@ -98,26 +98,27 @@ class GasterBlaster:
             # フェードイン
             self.alpha = int(255 * ease_t)
 
-            # 回転
-            self.angle += 6
-            self.angle %= 360
+            # ⭐ 出現中のイージング回転（1回転 → target_angle）
+            diff = (self.target_angle - self.angle)
+            diff = (diff + 180) % 360 - 180  # -180〜180 に正規化
+            self.angle += diff / 6  # ← 残り角度 / 6
 
             # 出現完了 → 開口へ
             if t >= 1:
                 self.state = GBState.OPEN
                 self.current_anim = self.anim_open
 
-        else:
-            # 通常アニメ更新
+        # 開口ステート
+        elif self.state == GBState.OPEN:
             self.current_anim.update(dt)
 
-            # 開口完了 → 発射へ
-            if self.state == GBState.OPEN and self.current_anim.finished:
+            if self.current_anim.finished:
                 self.state = GBState.DISAPPEAR
                 self.current_anim = self.anim_disappear
 
-                # ⭐ 発射時に指定角度へ向ける
-                self.angle = self.target_angle
+        # 発射ステート（回転なし）
+        elif self.state == GBState.DISAPPEAR:
+            self.current_anim.update(dt)
 
     def draw(self, screen):
         frame = self.current_anim.get_frame().copy()
@@ -127,9 +128,13 @@ class GasterBlaster:
             frame.set_alpha(self.alpha)
             frame = pygame.transform.rotate(frame, self.angle)
 
-        # 発射中：指定角度で固定
+        # 開口中：回転なし
+        elif self.state == GBState.OPEN:
+            pass
+
+        # 発射中：target_angle の向きで固定
         elif self.state == GBState.DISAPPEAR:
-            frame = pygame.transform.rotate(frame, self.angle)
+            frame = pygame.transform.rotate(frame, self.target_angle)
 
         rect = frame.get_rect(center=self.current_pos)
         screen.blit(frame, rect)
