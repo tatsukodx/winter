@@ -49,43 +49,78 @@ class Animation:
 #  ビーム（ポリゴン方式）
 # ============================
 class Beam:
-    def __init__(self, angle):
+    def __init__(self, angle, duration=600):
         self.angle = angle
         self.length = 0
         self.width = 30
         self.speed = 5000
         self.max_length = 3000
 
+        self.duration = duration      # ★ ここに反映
+        self.fade_duration = 400
+        self.timer = 0
+        self.alpha = 255
+
+
     def update(self, dt):
-        self.length += self.speed * (dt / 1000)
-        if self.length > self.max_length:
-            self.length = self.max_length
+        self.timer += dt
+
+        # まずは通常の伸びる処理
+        if self.length < self.max_length:
+            self.length += self.speed * (dt / 1000)
+            if self.length > self.max_length:
+                self.length = self.max_length
+
+        # 発射時間を過ぎたらフェードアウト開始
+        if self.timer > self.duration:
+            fade_t = (self.timer - self.duration) / self.fade_duration
+            fade_t = min(fade_t, 1)
+
+            self.alpha = int(255 * (1 - fade_t))
 
     def draw(self, screen, root_pos):
+        if self.alpha <= 0:
+            return
+
         rad = math.radians(self.angle)
-
-        # 方向ベクトル
         dir_vec = pygame.Vector2(math.cos(rad), -math.sin(rad))
-
-        # 法線ベクトル（横方向）
         normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
 
         half_w = self.width / 2
 
-        # 4頂点
         p1 = root_pos + normal * half_w
         p2 = root_pos - normal * half_w
         p3 = p2 + dir_vec * self.length
         p4 = p1 + dir_vec * self.length
 
-        pygame.draw.polygon(screen, (255, 255, 255), [p1, p2, p3, p4])
+        # ポリゴン用の一時サーフェス
+        min_x = min(p1.x, p2.x, p3.x, p4.x)
+        max_x = max(p1.x, p2.x, p3.x, p4.x)
+        min_y = min(p1.y, p2.y, p3.y, p4.y)
+        max_y = max(p1.y, p2.y, p3.y, p4.y)
 
+        w = int(max_x - min_x)
+        h = int(max_y - min_y)
+
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+
+        # ポリゴンをローカル座標に変換
+        pts = [
+            (p1.x - min_x, p1.y - min_y),
+            (p2.x - min_x, p2.y - min_y),
+            (p3.x - min_x, p3.y - min_y),
+            (p4.x - min_x, p4.y - min_y),
+        ]
+
+        pygame.draw.polygon(surf, (255, 255, 255, self.alpha), pts)
+
+        screen.blit(surf, (min_x, min_y))
 
 # ============================
 #  ガスターブラスター本体
 # ============================
 class GasterBlaster:
-    def __init__(self, pos=(300, 300)):
+    def __init__(self, pos=(300, 300), beam_duration=600):
         self.anim_appear = Animation([
             pygame.image.load("sprite/gasterblaster/1.png").convert_alpha()
         ], 200, False)
@@ -120,6 +155,15 @@ class GasterBlaster:
 
         self.back_speed = 0
         self.beam = None
+        
+        self.snd_charge = pygame.mixer.Sound("sound/gasterblaster/charge.mp3")
+        self.snd_fire = pygame.mixer.Sound("sound/gasterblaster/fire.mp3")
+        self.snd_charge.play()
+        
+        self.beam_duration = beam_duration
+        self.beam = None
+
+
 
     def update(self, dt):
         if self.state == GBState.APPEAR:
@@ -136,13 +180,17 @@ class GasterBlaster:
             if t >= 1:
                 self.state = GBState.OPEN
                 self.current_anim = self.anim_open
+                self.snd_fire.play()
 
         elif self.state == GBState.OPEN:
             self.current_anim.update(dt)
             if self.current_anim.finished:
                 self.state = GBState.DISAPPEAR
                 self.current_anim = self.anim_disappear
-                self.beam = Beam(self.target_angle)
+                self.beam = Beam(self.target_angle, self.beam_duration)  # ★ 渡す
+                self.snd_fire.play()
+                
+
 
         elif self.state == GBState.DISAPPEAR:
             self.current_anim.update(dt)
@@ -269,11 +317,10 @@ class Soul:
 #  ガスターブラスター管理
 # ============================
 class ScheduledBlaster:
-    def __init__(self, pos, angle, delay):
+    def __init__(self, pos, angle, beam_duration):
         self.pos = pos
         self.angle = angle
-        self.delay = delay
-        self.elapsed = 0
+        self.beam_duration = beam_duration
 
 
 class GasterBlasterManager:
@@ -281,22 +328,21 @@ class GasterBlasterManager:
         self.active = []
         self.scheduled = []
 
-    def spawn_blaster(self, pos, angle, delay_ms):
-        self.scheduled.append(ScheduledBlaster(pos, angle, delay_ms))
+    def spawn_blaster(self, pos, angle, beam_duration_ms):
+        self.scheduled.append(ScheduledBlaster(pos, angle, beam_duration_ms))
 
     def check_collision_beam_soul(self, beam, soul, root_pos):
-        # ビームがまだ伸びていない
         if beam.length <= 0:
             return False
 
         soul_radius = 10
         beam_radius = beam.width / 2
-        radius = soul_radius + beam_radius
 
         rad = math.radians(beam.angle)
         dir_vec = pygame.Vector2(math.cos(rad), -math.sin(rad))
         normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
 
+        # ビームの4頂点
         p1 = root_pos + normal * beam_radius
         p2 = root_pos - normal * beam_radius
         p3 = p2 + dir_vec * beam.length
@@ -304,26 +350,49 @@ class GasterBlasterManager:
 
         sp = soul.pos
 
-        line_vec = p4 - p1
-        if line_vec.length_squared() == 0:
-            return False
+        # ============================
+        # ① ソウルの中心が矩形の内部にあるか判定
+        # ============================
+        def sign(a, b, c):
+            return (a.x - c.x) * (b.y - c.y) - (b.x - c.x) * (a.y - c.y)
 
-        point_vec = sp - p1
-        t = max(0, min(1, point_vec.dot(line_vec) / line_vec.length_squared()))
-        closest = p1 + line_vec * t
+        b1 = sign(sp, p1, p2) < 0.0
+        b2 = sign(sp, p2, p3) < 0.0
+        b3 = sign(sp, p3, p4) < 0.0
+        b4 = sign(sp, p4, p1) < 0.0
 
-        distance = (sp - closest).length()
+        inside = (b1 == b2 == b3 == b4)
 
-        return distance <= radius
+        if inside:
+            return True
 
+        # ============================
+        # ② ソウルが矩形の辺に近い場合（端の判定）
+        # ============================
+        def dist_point_to_segment(p, a, b):
+            ab = b - a
+            ap = p - a
+            t = max(0, min(1, ap.dot(ab) / ab.length_squared()))
+            closest = a + ab * t
+            return (p - closest).length()
+
+        # 4辺のどれかに近ければ当たり
+        if dist_point_to_segment(sp, p1, p2) <= soul_radius:
+            return True
+        if dist_point_to_segment(sp, p2, p3) <= soul_radius:
+            return True
+        if dist_point_to_segment(sp, p3, p4) <= soul_radius:
+            return True
+        if dist_point_to_segment(sp, p4, p1) <= soul_radius:
+            return True
+
+        return False
     def update(self, dt, soul):
         for s in self.scheduled[:]:
-            s.elapsed += dt
-            if s.elapsed >= s.delay:
-                gb = GasterBlaster(pos=s.pos)
-                gb.target_angle = s.angle
-                self.active.append(gb)
-                self.scheduled.remove(s)
+            gb = GasterBlaster(pos=s.pos, beam_duration=s.beam_duration)
+            gb.target_angle = s.angle
+            self.active.append(gb)
+            self.scheduled.remove(s)
 
         for gb in self.active[:]:
             gb.update(dt)
@@ -363,6 +432,7 @@ def draw_hp(screen, soul):
 # ============================
 def main():
     pygame.init()
+    pygame.mixer.init()
     screen = pygame.display.set_mode((600, 600))
     clock = pygame.time.Clock()
 
@@ -373,6 +443,12 @@ def main():
     manager.spawn_blaster((300, 300), 0, 1000)
     manager.spawn_blaster((100, 500), 90, 2000)
     manager.spawn_blaster((500, 100), 225, 3000)
+    for i in range(30):
+        x = random.randint(0, 600)
+        y = random.randint(0, 600)
+        angle = random.randint(0, 360)
+        delay = random.randint(4000, 10000)
+        manager.spawn_blaster((x, y), angle, delay)
 
     running = True
     while running:
