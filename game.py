@@ -946,7 +946,7 @@ def main():
     CHANNEL_FIRE = pygame.mixer.Channel(1)
 
     screen = pygame.display.set_mode((800, 600))
-    pygame.display.set_caption("Gaster Blaster - Enhanced Edition")
+    pygame.display.set_caption("Gaster Blaster dodge Game")
     clock = pygame.time.Clock()
 
     # ゲーム要素の初期化
