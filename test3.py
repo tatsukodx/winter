@@ -225,8 +225,6 @@ class Beam:
         if self.alpha <= 0:
             return
 
-        # angleは0度=上向き、時計回りで定義されている
-        # これをラジアンに変換し、数学座標系(0度=右、反時計回り)に変換
         rad = math.radians(self.angle - 90)
         dir_vec = pygame.Vector2(math.cos(rad), math.sin(rad))
         normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
@@ -368,7 +366,6 @@ class GasterBlaster:
             if self.beam:
                 self.beam.update(dt)
 
-            # 後退処理を修正: angleは0度=上、時計回りなので、-90度オフセット
             rad = math.radians(self.target_angle - 90)
             back_vec = pygame.Vector2(-math.cos(rad), -math.sin(rad))
             
@@ -377,8 +374,6 @@ class GasterBlaster:
 
     def draw_beam_only(self, screen):
         if self.beam:
-            # 口の位置を計算: 画像の前方40ピクセル
-            # target_angleは0度=上、時計回りなので、rotateメソッドに合わせる
             mouth_offset = pygame.Vector2(0, -40).rotate(self.target_angle)
             mouth_pos = self.current_pos + mouth_offset
             self.beam.draw(screen, mouth_pos)
@@ -388,7 +383,6 @@ class GasterBlaster:
 
         if self.state == GBState.APPEAR:
             frame.set_alpha(self.alpha)
-            # pygameのrotateは反時計回りが正なので、マイナスをつける
             frame = pygame.transform.rotate(frame, -self.angle + 180)
         else:
             frame = pygame.transform.rotate(frame, -self.target_angle + 180)
@@ -452,7 +446,6 @@ class GasterBlasterManager:
         soul_radius = 10
         beam_radius = beam.hitbox_width / 2
 
-        # angleは0度=上、時計回り
         rad = math.radians(beam.angle - 90)
         dir_vec = pygame.Vector2(math.cos(rad), math.sin(rad))
         normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
@@ -533,7 +526,6 @@ class GasterBlasterManager:
             gb.update(dt)
 
             if gb.beam:
-                # 口の位置を計算
                 mouth_offset = pygame.Vector2(0, -40).rotate(gb.target_angle)
                 root_pos = gb.current_pos + mouth_offset
 
@@ -708,13 +700,29 @@ class AttackPatternManager:
         self.attack_cooldown = 0
         self.attack_timer = 0
         self.attack_count = 0
+        self.soul_ref = None  # ソウルへの参照
+
+    def set_soul(self, soul):
+        """ソウルへの参照を設定"""
+        self.soul_ref = soul
 
     def update(self, dt):
         self.attack_timer += dt
 
         if self.attack_state is None:
             if self.attack_cooldown <= 0:
-                self.attack_state = random.choice(["cross", "triple", "chain", "circle", "spiral"])
+                # 難易度が上がると高度な攻撃パターンも出現
+                if self.difficulty.level >= 5:
+                    patterns = ["cross", "triple", "chain", "circle", "spiral", 
+                               "aim", "double_aim", "corner_assault", "rotating_cross", 
+                               "wave", "pincer", "random_barrage"]
+                elif self.difficulty.level >= 3:
+                    patterns = ["cross", "triple", "chain", "circle", "spiral", 
+                               "aim", "corner_assault", "wave", "pincer"]
+                else:
+                    patterns = ["cross", "triple", "chain", "circle", "spiral", "aim"]
+                
+                self.attack_state = random.choice(patterns)
                 self.attack_timer = 0
                 self.attack_count = 0
             else:
@@ -722,9 +730,27 @@ class AttackPatternManager:
         else:
             self._execute_pattern(dt)
 
+    def _calculate_angle_to_soul(self, from_pos):
+        """指定位置からソウルへの角度を計算"""
+        if self.soul_ref is None:
+            return 0
+        
+        dx = self.soul_ref.pos.x - from_pos[0]
+        dy = self.soul_ref.pos.y - from_pos[1]
+        
+        # math.atan2はラジアンで返す(右=0度、反時計回り)
+        # ゲームの角度系(上=0度、時計回り)に変換
+        angle_rad = math.atan2(dy, dx)
+        angle_deg = math.degrees(angle_rad)
+        # 0度=右 → 0度=上に変換
+        angle_deg = (angle_deg + 90) % 360
+        
+        return angle_deg
+
     def _execute_pattern(self, dt):
         beam_duration = self.difficulty.get_beam_duration()
         
+        # 既存のパターン
         if self.attack_state == "cross":
             commands = []
             commands.append(("spawn", (self.box.rect.centerx, self.box.rect.top - 50), 0, beam_duration))
@@ -778,6 +804,127 @@ class AttackPatternManager:
                     self.attack_state = None
                     self.attack_cooldown = self.difficulty.get_attack_cooldown()
 
+        # 新パターン1: 自機狙い(単発)
+        elif self.attack_state == "aim":
+            commands = []
+            pos = (self.box.rect.centerx, self.box.rect.top - 50)
+            angle = self._calculate_angle_to_soul(pos)
+            commands.append(("spawn", pos, angle, beam_duration))
+            commands.append(("wait", 1000))
+            self.manager.sequence(commands)
+            self.attack_state = None
+            self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        # 新パターン2: 自機狙い(2連続)
+        elif self.attack_state == "double_aim":
+            if self.attack_timer >= 400:
+                self.attack_timer = 0
+                commands = []
+                # ランダムな位置から自機を狙う
+                positions = [
+                    (self.box.rect.centerx, self.box.rect.top - 50),
+                    (self.box.rect.centerx, self.box.rect.bottom + 50),
+                    (self.box.rect.left - 50, self.box.rect.centery),
+                    (self.box.rect.right + 50, self.box.rect.centery),
+                ]
+                pos = random.choice(positions)
+                angle = self._calculate_angle_to_soul(pos)
+                commands.append(("spawn", pos, angle, beam_duration))
+                self.manager.sequence(commands)
+                self.attack_count += 1
+                if self.attack_count >= 3:
+                    self.attack_state = None
+                    self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        # 新パターン3: 四隅からの襲撃
+        elif self.attack_state == "corner_assault":
+            commands = []
+            corners = [
+                (self.box.rect.left - 50, self.box.rect.top - 50),
+                (self.box.rect.right + 50, self.box.rect.top - 50),
+                (self.box.rect.left - 50, self.box.rect.bottom + 50),
+                (self.box.rect.right + 50, self.box.rect.bottom + 50),
+            ]
+            for corner in corners:
+                angle = self._calculate_angle_to_soul(corner)
+                commands.append(("spawn", corner, angle, beam_duration))
+            commands.append(("wait", 1500))
+            self.manager.sequence(commands)
+            self.attack_state = None
+            self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        # 新パターン4: 回転十字
+        elif self.attack_state == "rotating_cross":
+            if self.attack_timer >= 150:
+                self.attack_timer = 0
+                commands = []
+                base_angle = self.attack_count * 22.5  # 毎回少しずつ回転
+                for offset in [0, 90, 180, 270]:
+                    angle = (base_angle + offset) % 360
+                    commands.append(("spawn", (self.box.rect.centerx, self.box.rect.centery), angle, beam_duration))
+                self.manager.sequence(commands)
+                self.attack_count += 1
+                if self.attack_count >= 4:
+                    self.attack_state = None
+                    self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        # 新パターン5: 波状攻撃
+        elif self.attack_state == "wave":
+            if self.attack_timer >= 250:
+                self.attack_timer = 0
+                commands = []
+                # 上下左右からの順次攻撃
+                positions_angles = [
+                    ((self.box.rect.centerx, self.box.rect.top - 50), 180),
+                    ((self.box.rect.right + 50, self.box.rect.centery), 270),
+                    ((self.box.rect.centerx, self.box.rect.bottom + 50), 0),
+                    ((self.box.rect.left - 50, self.box.rect.centery), 90),
+                ]
+                pos, angle = positions_angles[self.attack_count % 4]
+                commands.append(("spawn", pos, angle, beam_duration))
+                self.manager.sequence(commands)
+                self.attack_count += 1
+                if self.attack_count >= 8:
+                    self.attack_state = None
+                    self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        # 新パターン6: 挟み撃ち
+        elif self.attack_state == "pincer":
+            commands = []
+            # 左右から同時攻撃
+            commands.append(("spawn", (self.box.rect.left - 50, self.box.rect.centery), 90, beam_duration))
+            commands.append(("spawn", (self.box.rect.right + 50, self.box.rect.centery), 270, beam_duration))
+            commands.append(("wait", 800))
+            # 上下から同時攻撃
+            commands.append(("spawn", (self.box.rect.centerx, self.box.rect.top - 50), 180, beam_duration))
+            commands.append(("spawn", (self.box.rect.centerx, self.box.rect.bottom + 50), 0, beam_duration))
+            commands.append(("wait", 1200))
+            self.manager.sequence(commands)
+            self.attack_state = None
+            self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        # 新パターン7: ランダム乱射
+        elif self.attack_state == "random_barrage":
+            if self.attack_timer >= 180:
+                self.attack_timer = 0
+                commands = []
+                # ランダムな位置とランダムな角度
+                x = random.randint(self.box.rect.left - 50, self.box.rect.right + 50)
+                y = random.randint(self.box.rect.top - 50, self.box.rect.bottom + 50)
+                
+                # 50%の確率で自機狙い、50%でランダム
+                if random.random() < 0.5:
+                    angle = self._calculate_angle_to_soul((x, y))
+                else:
+                    angle = random.randint(0, 359)
+                
+                commands.append(("spawn", (x, y), angle, beam_duration // 2))  # 短いビーム
+                self.manager.sequence(commands)
+                self.attack_count += 1
+                if self.attack_count >= 10:
+                    self.attack_state = None
+                    self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
     def reset(self):
         self.attack_state = None
         self.attack_cooldown = 0
@@ -816,6 +963,9 @@ def main():
     difficulty_manager = DifficultyManager()
     ui_manager = UIManager(screen)
     attack_manager = AttackPatternManager(manager, box, difficulty_manager)
+    
+    # ソウルへの参照を設定
+    attack_manager.set_soul(soul)
 
     game_state = GameState.PLAYING
 
@@ -838,6 +988,7 @@ def main():
                         score_manager.reset()
                         difficulty_manager = DifficultyManager()
                         attack_manager = AttackPatternManager(manager, box, difficulty_manager)
+                        attack_manager.set_soul(soul)
                         manager.clear()
                         particle_manager.particles.clear()
                         game_state = GameState.PLAYING
