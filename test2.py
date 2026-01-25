@@ -214,66 +214,14 @@ class GBState(Enum):
 
 
 # ============================
-#  音声管理システム（1つだけ再生）
-# ============================
-class SoundManager:
-    def __init__(self):
-        # ★ チャンネル数を設定
-        pygame.mixer.set_num_channels(8)
-        
-        # 音声をロード
-        self.charge_sound = pygame.mixer.Sound("sound/gasterblaster/charge.wav")
-        self.fire_sound = pygame.mixer.Sound("sound/gasterblaster/fire.wav")
-        
-        # ★ 音量を適切に設定
-        self.charge_sound.set_volume(0.6)
-        self.fire_sound.set_volume(0.6)
-        
-        # ★ 専用チャンネル
-        self.charge_channel = pygame.mixer.Channel(0)
-        self.fire_channel = pygame.mixer.Channel(1)
-        
-        # ★ 最後に再生した時刻
-        self.last_charge_time = 0
-        self.last_fire_time = 0
-        
-        # ★ 最小間隔（ミリ秒）
-        self.min_interval = 50  # 50ms以内は再生しない
-    
-    def play_charge(self):
-        """チャージ音を再生（同時再生されている場合はスキップ）"""
-        current_time = pygame.time.get_ticks()
-        
-        # ★ すでに再生中、または最小間隔内の場合はスキップ
-        if self.charge_channel.get_busy() or \
-           (current_time - self.last_charge_time) < self.min_interval:
-            return None
-        
-        # ★ 再生
-        self.charge_channel.play(self.charge_sound)
-        self.last_charge_time = current_time
-        return self.charge_channel
-    
-    def play_fire(self):
-        """発射音を再生（同時再生されている場合はスキップ）"""
-        current_time = pygame.time.get_ticks()
-        
-        # ★ すでに再生中、または最小間隔内の場合はスキップ
-        if self.fire_channel.get_busy() or \
-           (current_time - self.last_fire_time) < self.min_interval:
-            return None
-        
-        # ★ 再生
-        self.fire_channel.play(self.fire_sound)
-        self.last_fire_time = current_time
-        return self.fire_channel
-
-
-# ============================
 #  ガスターブラスター本体
 # ============================
 class GasterBlaster:
-    def __init__(self, pos, beam_duration, open_delay, sound_manager, manager):
+    def __init__(self, pos, beam_duration, open_delay,
+              snd_charge, snd_fire,
+              ch_charge, ch_fire,
+              manager):
+
 
         self.anim_appear = Animation([
             pygame.image.load("sprite/gasterblaster/1.png").convert_alpha()
@@ -312,18 +260,24 @@ class GasterBlaster:
         self.beam_duration = beam_duration
         self.beam = None
         
-        self.sound_manager = sound_manager
+        self.snd_charge = snd_charge
+        self.snd_fire = snd_fire
+        self.ch_charge = ch_charge
+        self.ch_fire = ch_fire
+        self.last_sound_time = 0
+        self.sound_cooldown = 200
         self.manager = manager
 
-        # ★ チャンネルを保持
-        self.my_channel = None
-        
-        # ★ チャージ音を再生（同時の場合はスキップされる）
-        self.my_channel = self.sound_manager.play_charge()
+        # チャージ音
+        now = pygame.time.get_ticks()
+        if now - self.manager.last_sound_time >= self.manager.sound_cooldown:
+            self.ch_charge.play(self.snd_charge)
+            self.manager.last_sound_time = now
+
         
         self.open_delay = open_delay
         self.open_timer = 0
-        self.fired = False
+
 
     def update(self, dt):
         if self.state == GBState.APPEAR:
@@ -351,15 +305,15 @@ class GasterBlaster:
             self.current_anim.update(dt)
 
             # 開口アニメが終わったら即発射
-            if self.current_anim.finished and not self.fired:
+            if self.current_anim.finished:
                 self.state = GBState.DISAPPEAR
                 self.current_anim = self.anim_disappear
                 self.beam = Beam(self.target_angle, self.beam_duration)
-                
-                # ★ 発射音を再生（同時の場合はスキップされる）
-                self.sound_manager.play_fire()
-                
-                self.fired = True
+                # 発射音
+                now = pygame.time.get_ticks()
+                if now - self.manager.last_sound_time >= self.manager.sound_cooldown:
+                    self.ch_fire.play(self.snd_fire)
+                    self.manager.last_sound_time = now
 
         elif self.state == GBState.DISAPPEAR:
             self.current_anim.update(dt)
@@ -376,6 +330,7 @@ class GasterBlaster:
     def draw_beam_only(self, screen):
         if self.beam:
             mouth_offset = pygame.Vector2(40, 0).rotate(self.target_angle-90)
+
             mouth_pos = self.current_pos + mouth_offset
             self.beam.draw(screen, mouth_pos)
 
@@ -388,6 +343,7 @@ class GasterBlaster:
         else:
             frame = pygame.transform.rotate(frame, -self.target_angle+180)
 
+
         rect = frame.get_rect(center=self.current_pos)
         screen.blit(frame, rect)
 
@@ -399,31 +355,40 @@ class ScheduledBlaster:
     def __init__(self, pos, angle, open_delay, beam_duration):
         self.pos = pos
         self.angle = angle
-        self.open_delay = open_delay
+        self.open_delay = open_delay   # ★ これが必要
         self.beam_duration = beam_duration
         self.spawned = False
 
-
 class GasterBlasterManager:
-    def __init__(self, sound_manager):
-        self.sound_manager = sound_manager
+    def __init__(self, snd_charge, snd_fire, ch_charge, ch_fire):
+        self.snd_charge = snd_charge
+        self.snd_fire = snd_fire
+        self.ch_charge = ch_charge
+        self.ch_fire = ch_fire
 
         self.blasters = []
         self.scheduled = []
         self.active = []
-        self.commands = []
-        self.command_timer = 0
+        self.commands = []      # シーケンス
+        self.command_timer = 0  # 待ち時間用
+        self.last_sound_time = 0
+        self.sound_cooldown = 100   # 0.1秒
 
+        
     def spawn(self, pos, angle, beam_duration=600, open_delay=0):
         gb = GasterBlaster(
             pos,
             beam_duration,
             open_delay,
-            self.sound_manager,
+            self.snd_charge,
+            self.snd_fire,
+            self.ch_charge,
+            self.ch_fire,
             self
         )
         gb.target_angle = angle
         self.blasters.append(gb)
+
 
     def sequence(self, commands):
         self.commands = commands
@@ -438,6 +403,7 @@ class GasterBlasterManager:
 
         soul_radius = 10
         beam_radius = beam.hitbox_width / 2
+
 
         rad = math.radians(beam.angle)
         dir_vec = pygame.Vector2(math.cos(rad), -math.sin(rad))
@@ -496,6 +462,7 @@ class GasterBlasterManager:
                     self.commands.pop(0)
 
             elif cmd[0] == "spawn":
+                # ("spawn", pos, angle, fire_delay)
                 _, pos, angle, fire_delay = cmd
                 self.spawn_blaster(pos, angle, fire_delay)
                 self.commands.pop(0)
@@ -507,9 +474,13 @@ class GasterBlasterManager:
                     pos=s.pos,
                     beam_duration=s.beam_duration,
                     open_delay=s.open_delay,
-                    sound_manager=self.sound_manager,
+                    snd_charge=self.snd_charge,
+                    snd_fire=self.snd_fire,
+                    ch_charge=self.ch_charge,
+                    ch_fire=self.ch_fire,
                     manager=self
                 )
+
                 gb.target_angle = s.angle
                 self.active.append(gb)
                 s.spawned = True
@@ -535,39 +506,50 @@ class GasterBlasterManager:
             gb.draw_beam_only(screen)
         for gb in self.active:
             gb.draw_body_only(screen)
+            
+
 
 
 # ============================
 #  メインループ
 # ============================
 def main():
+    pygame.mixer.pre_init(44100, -16, 2, 512)
     pygame.init()
     
-    # ★ 音声初期化を先に実行
-    pygame.mixer.pre_init(44100, -16, 2, 512)
-    pygame.mixer.init()
+    last_sound_time = 0
+    sound_cooldown = 100  # 0.1秒
+    
+    snd_charge = pygame.mixer.Sound("sound/gasterblaster/charge.wav")
+    snd_fire = pygame.mixer.Sound("sound/gasterblaster/fire.wav")
+    
+    CHANNEL_CHARGE = pygame.mixer.Channel(0)
+    CHANNEL_FIRE = pygame.mixer.Channel(1)
 
     screen = pygame.display.set_mode((800, 600))
     pygame.display.set_caption("Gaster Blaster Test")
     clock = pygame.time.Clock()
 
+    # バトルボックス
     box = BattleBox(200, 150, 400, 300)
     soul = Soul(box)
 
-    # ★ 音声管理システムを初期化
-    sound_manager = SoundManager()
-    
-    # ★ マネージャーに音声管理システムを渡す
-    manager = GasterBlasterManager(sound_manager)
+    manager = GasterBlasterManager(
+        snd_charge, snd_fire,
+        CHANNEL_CHARGE, CHANNEL_FIRE
+    )
+
+  
+
 
     font = pygame.font.SysFont(None, 24)
 
     running = True
-    attack_state = None
-    attack_cooldown = 0
-    attack_timer = 0
-    attack_count = 0
-    
+    if "attack_state" not in globals():
+        attack_state = None
+        attack_cooldown = 0
+        attack_timer = 0
+        attack_count = 0
     while running:
         dt = clock.tick(60)
 
@@ -579,8 +561,9 @@ def main():
         soul.update(keys, dt)
 
         # ============================
-        # ランダム攻撃パターン制御
-        # ============================
+        # ランダム攻撃パターン制御（ここに移動）
+        # ============================   
+
         attack_timer += dt
 
         if attack_state is None:
@@ -633,6 +616,7 @@ def main():
                 attack_state = None
                 attack_cooldown = 1500
 
+        # ここで commands が積まれた状態で update が動く
         manager.update(dt, soul)
 
         screen.fill((0, 0, 0))
@@ -640,6 +624,7 @@ def main():
         manager.draw(screen)
         soul.draw(screen)
 
+        # HP 表示
         hp_text = font.render(f"HP: {soul.hp}/{soul.max_hp}", True, (255, 255, 255))
         screen.blit(hp_text, (10, 10))
 

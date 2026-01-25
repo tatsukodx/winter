@@ -5,6 +5,59 @@ from enum import Enum
 
 
 # ============================
+#  パーティクル（視覚効果）
+# ============================
+class Particle:
+    def __init__(self, pos, color=(255, 255, 255)):
+        self.pos = pygame.Vector2(pos)
+        self.velocity = pygame.Vector2(
+            random.uniform(-2, 2),
+            random.uniform(-2, 2)
+        )
+        self.lifetime = random.randint(300, 600)
+        self.timer = 0
+        self.color = color
+        self.size = random.randint(2, 5)
+
+    def update(self, dt):
+        self.timer += dt
+        self.pos += self.velocity
+        self.velocity *= 0.98
+
+    def is_dead(self):
+        return self.timer >= self.lifetime
+
+    def draw(self, screen):
+        alpha = int(255 * (1 - self.timer / self.lifetime))
+        size = int(self.size * (1 - self.timer / self.lifetime))
+        if size > 0:
+            surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (*self.color, alpha), (size, size), size)
+            screen.blit(surf, (self.pos.x - size, self.pos.y - size))
+
+
+# ============================
+#  パーティクル管理
+# ============================
+class ParticleManager:
+    def __init__(self):
+        self.particles = []
+
+    def add_particles(self, pos, count=10, color=(255, 255, 255)):
+        for _ in range(count):
+            self.particles.append(Particle(pos, color))
+
+    def update(self, dt):
+        self.particles = [p for p in self.particles if not p.is_dead()]
+        for p in self.particles:
+            p.update(dt)
+
+    def draw(self, screen):
+        for p in self.particles:
+            p.draw(screen)
+
+
+# ============================
 #  バトルボックス
 # ============================
 class BattleBox:
@@ -51,6 +104,8 @@ class Soul:
             self.invincible_timer = self.invincible_duration
             self.flash_timer = self.flash_duration
             self.image = self.damaged_img
+            return True
+        return False
 
     def update(self, keys, dt):
         if keys[pygame.K_UP]:
@@ -93,6 +148,14 @@ class Soul:
         rect = self.image.get_rect(center=self.pos)
         screen.blit(self.image, rect)
 
+    def reset(self):
+        self.hp = self.max_hp
+        self.pos = pygame.Vector2(self.box.rect.centerx, self.box.rect.centery)
+        self.invincible = False
+        self.invincible_timer = 0
+        self.flash_timer = 0
+        self.image = self.normal_img
+
 
 # ============================
 #  アニメーション管理
@@ -133,16 +196,10 @@ class Beam:
     def __init__(self, angle, duration=600):
         self.angle = angle
         self.length = 0
-
-        # ★ 当たり判定用（固定）
         self.hitbox_width = 30
-
-        # ★ 描画用（変動）
         self.draw_width = 30
-
         self.speed = 5000
         self.max_length = 3000
-
         self.duration = duration
         self.fade_duration = 400
         self.timer = 0
@@ -151,17 +208,14 @@ class Beam:
     def update(self, dt):
         self.timer += dt
 
-        # 伸びる
         if self.length < self.max_length:
             self.length += self.speed * (dt / 1000)
             if self.length > self.max_length:
                 self.length = self.max_length
 
-        # ★ 見た目の太さを脈動させる（本家風）
-        pulse = (math.sin(self.timer * 0.02) + 1) * 0.5  # 0〜1
-        self.draw_width = 20 + pulse * 20  # 20〜40 の間で変化
+        pulse = (math.sin(self.timer * 0.02) + 1) * 0.5
+        self.draw_width = 20 + pulse * 20
 
-        # フェードアウト
         if self.timer > self.duration:
             fade_t = (self.timer - self.duration) / self.fade_duration
             fade_t = min(fade_t, 1)
@@ -175,7 +229,6 @@ class Beam:
         dir_vec = pygame.Vector2(math.cos(rad), math.sin(rad))
         normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
 
-        # ★ 描画は draw_width を使う
         half_w = self.draw_width / 2
 
         p1 = root_pos + normal * half_w
@@ -222,7 +275,6 @@ class GasterBlaster:
               ch_charge, ch_fire,
               manager):
 
-
         self.anim_appear = Animation([
             pygame.image.load("sprite/gasterblaster/1.png").convert_alpha()
         ], 200, False)
@@ -264,20 +316,15 @@ class GasterBlaster:
         self.snd_fire = snd_fire
         self.ch_charge = ch_charge
         self.ch_fire = ch_fire
-        self.last_sound_time = 0
-        self.sound_cooldown = 200
         self.manager = manager
 
-        # チャージ音
         now = pygame.time.get_ticks()
         if now - self.manager.last_sound_time >= self.manager.sound_cooldown:
             self.ch_charge.play(self.snd_charge)
             self.manager.last_sound_time = now
 
-        
         self.open_delay = open_delay
         self.open_timer = 0
-
 
     def update(self, dt):
         if self.state == GBState.APPEAR:
@@ -296,20 +343,16 @@ class GasterBlaster:
                 self.current_anim = self.anim_open
 
         elif self.state == GBState.OPEN:
-            # ★ 開口まで待つ
             if self.open_timer < self.open_delay:
                 self.open_timer += dt
                 return
 
-            # ★ 開口アニメを進める
             self.current_anim.update(dt)
 
-            # 開口アニメが終わったら即発射
             if self.current_anim.finished:
                 self.state = GBState.DISAPPEAR
                 self.current_anim = self.anim_disappear
                 self.beam = Beam(self.target_angle, self.beam_duration)
-                # 発射音
                 now = pygame.time.get_ticks()
                 if now - self.manager.last_sound_time >= self.manager.sound_cooldown:
                     self.ch_fire.play(self.snd_fire)
@@ -330,7 +373,6 @@ class GasterBlaster:
     def draw_beam_only(self, screen):
         if self.beam:
             mouth_offset = pygame.Vector2(40, 0).rotate(self.target_angle-90)
-
             mouth_pos = self.current_pos + mouth_offset
             self.beam.draw(screen, mouth_pos)
 
@@ -343,7 +385,6 @@ class GasterBlaster:
         else:
             frame = pygame.transform.rotate(frame, -self.target_angle+180)
 
-
         rect = frame.get_rect(center=self.current_pos)
         screen.blit(frame, rect)
 
@@ -355,9 +396,10 @@ class ScheduledBlaster:
     def __init__(self, pos, angle, open_delay, beam_duration):
         self.pos = pos
         self.angle = angle
-        self.open_delay = open_delay   # ★ これが必要
+        self.open_delay = open_delay
         self.beam_duration = beam_duration
         self.spawned = False
+
 
 class GasterBlasterManager:
     def __init__(self, snd_charge, snd_fire, ch_charge, ch_fire):
@@ -369,12 +411,11 @@ class GasterBlasterManager:
         self.blasters = []
         self.scheduled = []
         self.active = []
-        self.commands = []      # シーケンス
-        self.command_timer = 0  # 待ち時間用
+        self.commands = []
+        self.command_timer = 0
         self.last_sound_time = 0
-        self.sound_cooldown = 100   # 0.1秒
+        self.sound_cooldown = 100
 
-        
     def spawn(self, pos, angle, beam_duration=600, open_delay=0):
         gb = GasterBlaster(
             pos,
@@ -388,7 +429,6 @@ class GasterBlasterManager:
         )
         gb.target_angle = angle
         self.blasters.append(gb)
-
 
     def sequence(self, commands):
         self.commands = commands
@@ -404,12 +444,10 @@ class GasterBlasterManager:
         soul_radius = 10
         beam_radius = beam.hitbox_width / 2
 
-
         rad = math.radians(beam.angle)
         dir_vec = pygame.Vector2(math.cos(rad), -math.sin(rad))
         normal = pygame.Vector2(-dir_vec.y, dir_vec.x)
 
-        # ビームの4頂点
         p1 = root_pos + normal * beam_radius
         p2 = root_pos - normal * beam_radius
         p3 = p2 + dir_vec * beam.length
@@ -417,7 +455,6 @@ class GasterBlasterManager:
 
         sp = soul.pos
 
-        # ① ソウルの中心が矩形の内部にあるか判定
         def sign(a, b, c):
             return (a.x - c.x) * (b.y - c.y) - (b.x - c.x) * (a.y - c.y)
 
@@ -431,7 +468,6 @@ class GasterBlasterManager:
         if inside:
             return True
 
-        # ② ソウルが矩形の辺に近い場合（端の判定）
         def dist_point_to_segment(p, a, b):
             ab = b - a
             ap = p - a
@@ -450,8 +486,7 @@ class GasterBlasterManager:
 
         return False
 
-    def update(self, dt, soul):
-        # シーケンス処理
+    def update(self, dt, soul, particle_manager):
         if self.commands:
             cmd = self.commands[0]
 
@@ -462,12 +497,10 @@ class GasterBlasterManager:
                     self.commands.pop(0)
 
             elif cmd[0] == "spawn":
-                # ("spawn", pos, angle, fire_delay)
                 _, pos, angle, fire_delay = cmd
                 self.spawn_blaster(pos, angle, fire_delay)
                 self.commands.pop(0)
 
-        # まだ spawn されていない ScheduledBlaster を GasterBlaster に変換
         for s in self.scheduled:
             if not s.spawned:
                 gb = GasterBlaster(
@@ -485,7 +518,6 @@ class GasterBlasterManager:
                 self.active.append(gb)
                 s.spawned = True
 
-        # 既存ブラスター更新
         for gb in self.active[:]:
             gb.update(dt)
 
@@ -494,9 +526,9 @@ class GasterBlasterManager:
                 root_pos = gb.current_pos + mouth_offset
 
                 if self.check_collision_beam_soul(gb.beam, soul, root_pos):
-                    soul.take_damage(5)
+                    if soul.take_damage(5):
+                        particle_manager.add_particles(soul.pos, 20, (255, 100, 100))
 
-            # 画面外に大きく出たら削除
             if gb.current_pos.x < -300 or gb.current_pos.x > 900 or \
                gb.current_pos.y < -300 or gb.current_pos.y > 900:
                 self.active.remove(gb)
@@ -506,8 +538,239 @@ class GasterBlasterManager:
             gb.draw_beam_only(screen)
         for gb in self.active:
             gb.draw_body_only(screen)
-            
 
+    def clear(self):
+        self.active.clear()
+        self.scheduled.clear()
+        self.commands.clear()
+
+
+# ============================
+#  ゲームステート
+# ============================
+class GameState(Enum):
+    PLAYING = 0
+    GAME_OVER = 1
+
+
+# ============================
+#  スコア管理
+# ============================
+class ScoreManager:
+    def __init__(self):
+        self.score = 0
+        self.combo = 0
+        self.combo_timer = 0
+        self.combo_duration = 3000
+        self.high_score = 0
+
+    def update(self, dt, soul_alive):
+        if soul_alive:
+            self.score += dt // 10
+            self.combo_timer += dt
+            if self.combo_timer >= 1000:
+                self.combo += 1
+                self.combo_timer = 0
+        else:
+            self.combo = 0
+            self.combo_timer = 0
+
+    def reset_combo(self):
+        self.combo = 0
+        self.combo_timer = 0
+
+    def update_high_score(self):
+        if self.score > self.high_score:
+            self.high_score = self.score
+
+    def reset(self):
+        self.score = 0
+        self.combo = 0
+        self.combo_timer = 0
+
+
+# ============================
+#  難易度管理
+# ============================
+class DifficultyManager:
+    def __init__(self):
+        self.level = 1
+        self.score_threshold = 1000
+
+    def update(self, score):
+        self.level = 1 + score // self.score_threshold
+
+    def get_attack_cooldown(self):
+        base = 1000
+        reduction = min(500, self.level * 50)
+        return max(500, base - reduction)
+
+    def get_beam_duration(self):
+        base = 800
+        increase = min(400, self.level * 30)
+        return base + increase
+
+
+# ============================
+#  UI描画
+# ============================
+class UIManager:
+    def __init__(self, screen):
+        self.screen = screen
+        self.font_large = pygame.font.SysFont(None, 48)
+        self.font_medium = pygame.font.SysFont(None, 32)
+        self.font_small = pygame.font.SysFont(None, 24)
+
+    def draw_hud(self, soul, score_manager, difficulty_manager):
+        # HP バー
+        hp_width = 200
+        hp_height = 20
+        hp_ratio = soul.hp / soul.max_hp
+        
+        pygame.draw.rect(self.screen, (100, 100, 100), (10, 10, hp_width, hp_height))
+        pygame.draw.rect(self.screen, (255, 0, 0), (10, 10, hp_width * hp_ratio, hp_height))
+        pygame.draw.rect(self.screen, (255, 255, 255), (10, 10, hp_width, hp_height), 2)
+
+        hp_text = self.font_small.render(f"HP: {soul.hp}/{soul.max_hp}", True, (255, 255, 255))
+        self.screen.blit(hp_text, (220, 12))
+
+        # スコア
+        score_text = self.font_medium.render(f"Score: {score_manager.score}", True, (255, 255, 255))
+        self.screen.blit(score_text, (10, 40))
+
+        # コンボ
+        if score_manager.combo > 0:
+            combo_text = self.font_medium.render(f"Combo: {score_manager.combo}x", True, (255, 200, 0))
+            self.screen.blit(combo_text, (10, 75))
+
+        # レベル
+        level_text = self.font_small.render(f"Level: {difficulty_manager.level}", True, (200, 200, 255))
+        self.screen.blit(level_text, (self.screen.get_width() - 120, 10))
+
+        # ハイスコア
+        high_score_text = self.font_small.render(f"High: {score_manager.high_score}", True, (255, 255, 100))
+        self.screen.blit(high_score_text, (self.screen.get_width() - 150, 35))
+
+    def draw_game_over(self, score_manager):
+        # 半透明背景
+        overlay = pygame.Surface((self.screen.get_width(), self.screen.get_height()))
+        overlay.set_alpha(200)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+
+        # ゲームオーバー文字
+        game_over_text = self.font_large.render("GAME OVER", True, (255, 50, 50))
+        rect = game_over_text.get_rect(center=(self.screen.get_width() // 2, 200))
+        self.screen.blit(game_over_text, rect)
+
+        # スコア
+        score_text = self.font_medium.render(f"Final Score: {score_manager.score}", True, (255, 255, 255))
+        rect = score_text.get_rect(center=(self.screen.get_width() // 2, 280))
+        self.screen.blit(score_text, rect)
+
+        # ハイスコア
+        if score_manager.score == score_manager.high_score and score_manager.score > 0:
+            new_record = self.font_medium.render("NEW RECORD!", True, (255, 255, 0))
+            rect = new_record.get_rect(center=(self.screen.get_width() // 2, 320))
+            self.screen.blit(new_record, rect)
+
+        # 操作説明
+        retry_text = self.font_small.render("Press R to Retry", True, (200, 200, 200))
+        rect = retry_text.get_rect(center=(self.screen.get_width() // 2, 400))
+        self.screen.blit(retry_text, rect)
+
+        quit_text = self.font_small.render("Press ESC to Quit", True, (200, 200, 200))
+        rect = quit_text.get_rect(center=(self.screen.get_width() // 2, 430))
+        self.screen.blit(quit_text, rect)
+
+
+# ============================
+#  攻撃パターン管理
+# ============================
+class AttackPatternManager:
+    def __init__(self, manager, box, difficulty_manager):
+        self.manager = manager
+        self.box = box
+        self.difficulty = difficulty_manager
+        self.attack_state = None
+        self.attack_cooldown = 0
+        self.attack_timer = 0
+        self.attack_count = 0
+
+    def update(self, dt):
+        self.attack_timer += dt
+
+        if self.attack_state is None:
+            if self.attack_cooldown <= 0:
+                self.attack_state = random.choice(["cross", "triple", "chain", "circle", "spiral"])
+                self.attack_timer = 0
+                self.attack_count = 0
+            else:
+                self.attack_cooldown -= dt
+        else:
+            self._execute_pattern(dt)
+
+    def _execute_pattern(self, dt):
+        beam_duration = self.difficulty.get_beam_duration()
+        
+        if self.attack_state == "cross":
+            commands = []
+            commands.append(("spawn", (self.box.rect.centerx, self.box.rect.top - 50), 0, beam_duration))
+            commands.append(("spawn", (self.box.rect.centerx, self.box.rect.bottom + 50), 180, beam_duration))
+            commands.append(("spawn", (self.box.rect.left - 50, self.box.rect.centery), 270, beam_duration))
+            commands.append(("spawn", (self.box.rect.right + 50, self.box.rect.centery), 90, beam_duration))
+            commands.append(("wait", 1500))
+            self.manager.sequence(commands)
+            self.attack_state = None
+            self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        elif self.attack_state == "triple":
+            commands = []
+            for a in [0, 120, 240]:
+                commands.append(("spawn", (self.box.rect.centerx, self.box.rect.centery), a, beam_duration))
+            commands.append(("wait", 1200))
+            self.manager.sequence(commands)
+            self.attack_state = None
+            self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        elif self.attack_state == "chain":
+            if self.attack_timer >= 300:
+                self.attack_timer = 0
+                commands = []
+                angle = random.choice([0, 90, 180, 270])
+                commands.append(("spawn", (self.box.rect.centerx, self.box.rect.centery), angle, beam_duration))
+                self.manager.sequence(commands)
+                self.attack_count += 1
+                if self.attack_count >= 5:
+                    self.attack_state = None
+                    self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        elif self.attack_state == "circle":
+            commands = []
+            for i in range(8):
+                commands.append(("spawn", (self.box.rect.centerx, self.box.rect.centery), i * 45, beam_duration))
+            commands.append(("wait", 1500))
+            self.manager.sequence(commands)
+            self.attack_state = None
+            self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+        elif self.attack_state == "spiral":
+            if self.attack_timer >= 200:
+                self.attack_timer = 0
+                angle = self.attack_count * 30
+                commands = []
+                commands.append(("spawn", (self.box.rect.centerx, self.box.rect.centery), angle, beam_duration))
+                self.manager.sequence(commands)
+                self.attack_count += 1
+                if self.attack_count >= 12:
+                    self.attack_state = None
+                    self.attack_cooldown = self.difficulty.get_attack_cooldown()
+
+    def reset(self):
+        self.attack_state = None
+        self.attack_cooldown = 0
+        self.attack_timer = 0
+        self.attack_count = 0
 
 
 # ============================
@@ -517,9 +780,6 @@ def main():
     pygame.mixer.pre_init(44100, -16, 2, 512)
     pygame.init()
     
-    last_sound_time = 0
-    sound_cooldown = 100  # 0.1秒
-    
     snd_charge = pygame.mixer.Sound("sound/gasterblaster/charge.wav")
     snd_fire = pygame.mixer.Sound("sound/gasterblaster/fire.wav")
     
@@ -527,10 +787,10 @@ def main():
     CHANNEL_FIRE = pygame.mixer.Channel(1)
 
     screen = pygame.display.set_mode((800, 600))
-    pygame.display.set_caption("Gaster Blaster Test")
+    pygame.display.set_caption("Gaster Blaster - Enhanced Edition")
     clock = pygame.time.Clock()
 
-    # バトルボックス
+    # ゲーム要素の初期化
     box = BattleBox(200, 150, 400, 300)
     soul = Soul(box)
 
@@ -539,94 +799,62 @@ def main():
         CHANNEL_CHARGE, CHANNEL_FIRE
     )
 
-  
+    particle_manager = ParticleManager()
+    score_manager = ScoreManager()
+    difficulty_manager = DifficultyManager()
+    ui_manager = UIManager(screen)
+    attack_manager = AttackPatternManager(manager, box, difficulty_manager)
 
-
-    font = pygame.font.SysFont(None, 24)
+    game_state = GameState.PLAYING
 
     running = True
-    if "attack_state" not in globals():
-        attack_state = None
-        attack_cooldown = 0
-        attack_timer = 0
-        attack_count = 0
     while running:
         dt = clock.tick(60)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+                
+                if game_state == GameState.GAME_OVER:
+                    if event.key == pygame.K_r:
+                        # リセット
+                        soul.reset()
+                        score_manager.reset()
+                        difficulty_manager = DifficultyManager()
+                        attack_manager = AttackPatternManager(manager, box, difficulty_manager)
+                        manager.clear()
+                        particle_manager.particles.clear()
+                        game_state = GameState.PLAYING
 
         keys = pygame.key.get_pressed()
-        soul.update(keys, dt)
 
-        # ============================
-        # ランダム攻撃パターン制御（ここに移動）
-        # ============================   
+        if game_state == GameState.PLAYING:
+            soul.update(keys, dt)
+            manager.update(dt, soul, particle_manager)
+            particle_manager.update(dt)
+            score_manager.update(dt, soul.hp > 0)
+            difficulty_manager.update(score_manager.score)
+            attack_manager.update(dt)
 
-        attack_timer += dt
+            # ゲームオーバー判定
+            if soul.hp <= 0:
+                game_state = GameState.GAME_OVER
+                score_manager.update_high_score()
 
-        if attack_state is None:
-            if attack_cooldown <= 0:
-                attack_state = random.choice(["cross", "triple", "chain", "circle"])
-                attack_timer = 0
-                attack_count = 0
-            else:
-                attack_cooldown -= dt
-
-        else:
-            if attack_state == "cross":
-                commands = []
-                commands.append(("spawn", (box.rect.centerx, box.rect.top - 50), 0, 800))
-                commands.append(("spawn", (box.rect.centerx, box.rect.bottom + 50), 180, 800))
-                commands.append(("spawn", (box.rect.left - 50, box.rect.centery), 270, 800))
-                commands.append(("spawn", (box.rect.right + 50, box.rect.centery), 90, 800))
-                commands.append(("wait", 1500))
-                manager.sequence(commands)
-                attack_state = None
-                attack_cooldown = 1000
-
-            elif attack_state == "triple":
-                commands = []
-                for a in [0, 120, 240]:
-                    commands.append(("spawn", (box.rect.centerx, box.rect.centery), a, 800))
-                commands.append(("wait", 1200))
-                manager.sequence(commands)
-                attack_state = None
-                attack_cooldown = 1200
-
-            elif attack_state == "chain":
-                if attack_timer >= 300:
-                    attack_timer = 0
-                    commands = []
-                    angle = random.choice([0, 90, 180, 270])
-                    commands.append(("spawn", (box.rect.centerx, box.rect.centery), angle, 800))
-                    manager.sequence(commands)
-                    attack_count += 1
-                    if attack_count >= 5:
-                        attack_state = None
-                        attack_cooldown = 1500
-
-            elif attack_state == "circle":
-                commands = []
-                for i in range(8):
-                    commands.append(("spawn", (box.rect.centerx, box.rect.centery), i * 45, 800))
-                commands.append(("wait", 1500))
-                manager.sequence(commands)
-                attack_state = None
-                attack_cooldown = 1500
-
-        # ここで commands が積まれた状態で update が動く
-        manager.update(dt, soul)
-
+        # 描画
         screen.fill((0, 0, 0))
         box.draw(screen)
         manager.draw(screen)
+        particle_manager.draw(screen)
         soul.draw(screen)
+        ui_manager.draw_hud(soul, score_manager, difficulty_manager)
 
-        # HP 表示
-        hp_text = font.render(f"HP: {soul.hp}/{soul.max_hp}", True, (255, 255, 255))
-        screen.blit(hp_text, (10, 10))
+        if game_state == GameState.GAME_OVER:
+            ui_manager.draw_game_over(score_manager)
 
         pygame.display.flip()
 
