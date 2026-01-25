@@ -216,7 +216,10 @@ class GBState(Enum):
 #  ガスターブラスター本体
 # ============================
 class GasterBlaster:
-    def __init__(self, pos=(300, 300), beam_duration=600, open_delay=0):
+    def __init__(self, pos, beam_duration, open_delay,
+                 snd_charge, snd_fire,
+                 ch_charge, ch_fire):
+
         self.anim_appear = Animation([
             pygame.image.load("sprite/gasterblaster/1.png").convert_alpha()
         ], 200, False)
@@ -253,10 +256,15 @@ class GasterBlaster:
 
         self.beam_duration = beam_duration
         self.beam = None
+        
+        self.snd_charge = snd_charge
+        self.snd_fire = snd_fire
+        self.ch_charge = ch_charge
+        self.ch_fire = ch_fire
 
-        self.snd_charge = pygame.mixer.Sound("sound/gasterblaster/charge.mp3")
-        self.snd_fire = pygame.mixer.Sound("sound/gasterblaster/fire.mp3")
-        self.snd_charge.play()
+
+        self.ch_charge.play(self.snd_charge)
+
         
         self.open_delay = open_delay
         self.open_timer = 0
@@ -292,7 +300,7 @@ class GasterBlaster:
                 self.state = GBState.DISAPPEAR
                 self.current_anim = self.anim_disappear
                 self.beam = Beam(self.target_angle, self.beam_duration)
-                self.snd_fire.play()
+                self.ch_fire.play(self.snd_fire)
 
         elif self.state == GBState.DISAPPEAR:
             self.current_anim.update(dt)
@@ -300,8 +308,8 @@ class GasterBlaster:
                 self.beam.update(dt)
 
             back_vec = pygame.Vector2(
-                math.cos(math.radians(self.target_angle + 180)),
-                -math.sin(math.radians(self.target_angle + 180))
+                math.cos(math.radians(-self.target_angle - 90)),
+                -math.sin(math.radians(-self.target_angle - 90))
             )
             self.back_speed += 0.02 * dt
             self.current_pos += back_vec * self.back_speed
@@ -339,11 +347,31 @@ class ScheduledBlaster:
         self.spawned = False
 
 class GasterBlasterManager:
-    def __init__(self):
+    def __init__(self, snd_charge, snd_fire, ch_charge, ch_fire):
+        self.snd_charge = snd_charge
+        self.snd_fire = snd_fire
+        self.ch_charge = ch_charge
+        self.ch_fire = ch_fire
+
+        self.blasters = []
         self.scheduled = []
         self.active = []
         self.commands = []      # シーケンス
         self.command_timer = 0  # 待ち時間用
+        
+    def spawn(self, pos, angle, beam_duration=600, open_delay=0):
+        gb = GasterBlaster(
+            pos,
+            beam_duration,
+            open_delay,
+            self.snd_charge,
+            self.snd_fire,
+            self.ch_charge,
+            self.ch_fire
+        )
+        gb.target_angle = angle
+        self.blasters.append(gb)
+
 
     def sequence(self, commands):
         self.commands = commands
@@ -428,8 +456,12 @@ class GasterBlasterManager:
                 gb = GasterBlaster(
                     pos=s.pos,
                     beam_duration=s.beam_duration,
-                    open_delay=s.open_delay
-                    )
+                    open_delay=s.open_delay,
+                    snd_charge=self.snd_charge,
+                    snd_fire=self.snd_fire,
+                    ch_charge=self.ch_charge,
+                    ch_fire=self.ch_fire
+                )
                 gb.target_angle = s.angle
                 self.active.append(gb)
                 s.spawned = True
@@ -455,6 +487,8 @@ class GasterBlasterManager:
             gb.draw_beam_only(screen)
         for gb in self.active:
             gb.draw_body_only(screen)
+            
+
 
 
 # ============================
@@ -463,6 +497,12 @@ class GasterBlasterManager:
 def main():
     pygame.init()
     pygame.mixer.init()
+    
+    snd_charge = pygame.mixer.Sound("sound/gasterblaster/charge.wav")
+    snd_fire = pygame.mixer.Sound("sound/gasterblaster/fire.wav")
+    
+    CHANNEL_CHARGE = pygame.mixer.Channel(0)
+    CHANNEL_FIRE = pygame.mixer.Channel(1)
 
     screen = pygame.display.set_mode((800, 600))
     pygame.display.set_caption("Gaster Blaster Test")
@@ -472,26 +512,22 @@ def main():
     box = BattleBox(200, 150, 400, 300)
     soul = Soul(box)
 
-    manager = GasterBlasterManager()
+    manager = GasterBlasterManager(
+        snd_charge, snd_fire,
+        CHANNEL_CHARGE, CHANNEL_FIRE
+    )
 
-    commands = []
-
-    # 上
-    commands.append(("spawn", (box.rect.centerx, box.rect.top - 50), 0, 800))
-    # 下
-    commands.append(("spawn", (box.rect.centerx, box.rect.bottom + 50), 180, 800))
-    # 左
-    commands.append(("spawn", (box.rect.left - 50, box.rect.centery), 270, 800))
-    # 右
-    commands.append(("spawn", (box.rect.right + 50, box.rect.centery), 90, 800))
-
-    commands.append(("wait", 1500))
-    manager.sequence(commands)
+  
 
 
     font = pygame.font.SysFont(None, 24)
 
     running = True
+    if "attack_state" not in globals():
+        attack_state = None
+        attack_cooldown = 0
+        attack_timer = 0
+        attack_count = 0
     while running:
         dt = clock.tick(60)
 
@@ -501,6 +537,64 @@ def main():
 
         keys = pygame.key.get_pressed()
         soul.update(keys, dt)
+
+        # ============================
+        # ランダム攻撃パターン制御（ここに移動）
+        # ============================   
+
+        attack_timer += dt
+
+        if attack_state is None:
+            if attack_cooldown <= 0:
+                attack_state = random.choice(["cross", "triple", "chain", "circle"])
+                attack_timer = 0
+                attack_count = 0
+            else:
+                attack_cooldown -= dt
+
+        else:
+            if attack_state == "cross":
+                commands = []
+                commands.append(("spawn", (box.rect.centerx, box.rect.top - 50), 0, 800))
+                commands.append(("spawn", (box.rect.centerx, box.rect.bottom + 50), 180, 800))
+                commands.append(("spawn", (box.rect.left - 50, box.rect.centery), 270, 800))
+                commands.append(("spawn", (box.rect.right + 50, box.rect.centery), 90, 800))
+                commands.append(("wait", 1500))
+                manager.sequence(commands)
+                attack_state = None
+                attack_cooldown = 1000
+
+            elif attack_state == "triple":
+                commands = []
+                for a in [0, 120, 240]:
+                    commands.append(("spawn", (box.rect.centerx, box.rect.centery), a, 800))
+                commands.append(("wait", 1200))
+                manager.sequence(commands)
+                attack_state = None
+                attack_cooldown = 1200
+
+            elif attack_state == "chain":
+                if attack_timer >= 300:
+                    attack_timer = 0
+                    commands = []
+                    angle = random.choice([0, 90, 180, 270])
+                    commands.append(("spawn", (box.rect.centerx, box.rect.centery), angle, 800))
+                    manager.sequence(commands)
+                    attack_count += 1
+                    if attack_count >= 5:
+                        attack_state = None
+                        attack_cooldown = 1500
+
+            elif attack_state == "circle":
+                commands = []
+                for i in range(8):
+                    commands.append(("spawn", (box.rect.centerx, box.rect.centery), i * 45, 800))
+                commands.append(("wait", 1500))
+                manager.sequence(commands)
+                attack_state = None
+                attack_cooldown = 1500
+
+        # ここで commands が積まれた状態で update が動く
         manager.update(dt, soul)
 
         screen.fill((0, 0, 0))
